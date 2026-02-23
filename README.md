@@ -36,8 +36,10 @@ Scaffolds the structure into the current directory.
 |---------|-------------|
 | `/new-game <name> [slot\|burst]` | Create new project as sibling directory |
 | `/init-game <name> [slot\|burst]` | Scaffold into current directory |
+| `/review-game <game-slug>` | Review a sibling game project for RULES.md compliance |
+| `/review-game` (no args) | Review the current game project for RULES.md compliance |
 
-**Arguments:**
+**Scaffolding arguments:**
 - `name` — game title (e.g., "Cosmic Slots", "Moon Crash")
 - `type` — `slot` (default) or `burst` (crash-style game)
 
@@ -118,6 +120,16 @@ my-game/
 ├── docs/               — STAKE_ENGINE_RULES.md (symlink)
 ├── CLAUDE.md           — Project guidance for AI agents
 └── package.json        — pnpm monorepo root
+```
+
+## Using Skills from Another Project
+
+To make `/new-game` and `/init-game` available in a different project, add `commandPaths` to that project's `.claude/settings.json`:
+
+```json
+{
+  "commandPaths": ["/absolute/path/to/stake-engine-rules/.claude/commands"]
+}
 ```
 
 ## RULES.md
