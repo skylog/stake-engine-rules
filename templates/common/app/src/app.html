@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{GAME_NAME}}</title>
+    <script>
+      // Set <base> so relative paths (./_app/...) resolve from the correct
+      // directory even when the URL has no trailing slash.
+      // Stake Engine serves from /{gameId}/{version}/, not root.
+      (function() {
+        var p = location.pathname;
+        var dir = p.endsWith('/') ? p : p.substring(0, p.lastIndexOf('/') + 1);
+        var b = document.createElement('base');
+        b.href = dir;
+        document.head.appendChild(b);
+      })();
+    </script>
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>
