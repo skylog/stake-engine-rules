@@ -18,6 +18,8 @@ This repo is NOT a game itself — it generates game projects.
 - `/init-game <name> [slot|burst]` — scaffolds into the current working directory
 - `/review-game <game-slug>` — reviews a sibling game project for RULES.md compliance
 - `/review-game` (no args) — reviews the current directory's game project for RULES.md compliance
+- `/pre-submit <game-slug>` — production build + bundle analysis + full review (final gate before approval)
+- `/pre-submit` (no args) — same, for the current directory
 
 Both skills parse the name into `{{GAME_NAME}}` (Title Case), `{{GAME_SLUG}}` (kebab-case), `{{GAME_SNAKE}}` (snake_case), substitute all template placeholders, symlink RULES.md into `docs/`, run `git init` and `pnpm install`.
 

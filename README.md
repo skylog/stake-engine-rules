@@ -38,6 +38,8 @@ Scaffolds the structure into the current directory.
 | `/init-game <name> [slot\|burst]` | Scaffold into current directory |
 | `/review-game <game-slug>` | Review a sibling game project for RULES.md compliance |
 | `/review-game` (no args) | Review the current game project for RULES.md compliance |
+| `/pre-submit <game-slug>` | Build + bundle analysis + full review before approval |
+| `/pre-submit` (no args) | Same, for the current game project |
 
 **Scaffolding arguments:**
 - `name` — game title (e.g., "Cosmic Slots", "Moon Crash")
