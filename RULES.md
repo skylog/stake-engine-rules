@@ -561,6 +561,15 @@ function createTerms(social: boolean) {
 
 **Apply `t()` to ALL user-visible text:** labels, buttons, rules modal, result screen, error messages.
 
+**Common mistake:** Hardcoded error strings bypass `t()`. For example, `errorToast = 'Insufficient funds'` contains the restricted word "funds" and won't be filtered. Always use `t()`:
+```typescript
+// BAD — "funds" is a restricted term in social mode
+errorToast = 'Insufficient funds';
+
+// GOOD — goes through terminology filter
+errorToast = t('Insufficient balance');
+```
+
 ---
 
 ## 13. Math Engine
@@ -821,7 +830,7 @@ export function getGameContext(): GameContext {
 ### Rules & Paytable (Accessible from UI)
 
 - [ ] Detailed game rules
-- [ ] RTP of game (and each mode)
+- [ ] **RTP of game must match empirical math output** — compute from lookup tables, don't hardcode uniform values (e.g., 93.00% everywhere when actual values range 92.90%–93.06%)
 - [ ] Maximum win amount per mode
 - [ ] Payout amounts for all symbol/outcome combinations
 - [ ] If special symbols: list all obtainable values
@@ -850,6 +859,100 @@ TM and (c) {year} Stake Engine.
 - [ ] Supports mini-player modal (popout view) without distortion
 - [ ] Supports mobile view for common devices
 - [ ] All UI functionality usable during screen scaling
+
+### Responsive / Viewport Requirements (From Review)
+
+Stake Engine reviews test at **specific small viewports**. These MUST work without cutoff or overflow:
+
+- [ ] **Popout S (~480×270)**: All popups (bet picker, target picker, autoplay config) must be scrollable with `max-height` + `overflow-y: auto`. Buttons like DONE/START must always be visible (use `flex-shrink: 0` on action rows, only scroll the content grid).
+- [ ] **Mobile S (~320×568)**: Balance area must handle large amounts ($25,000+) without pushing elements off-screen. Use `flex-shrink`, `min-width: 0`, and `overflow: hidden` on text containers.
+- [ ] **Test with production bet levels** — demo mode may have 7 levels, but production configs can have 33+. All must fit and scroll in the bet picker popup.
+- [ ] **Toolbar buttons (info, mute) must not compete with balance** — on narrow screens, move them to a separate row (e.g., `flex-direction: column-reverse` on mobile).
+
+### Test Resolutions (36 viewports)
+
+Every resolution must be verified across 5 screens: **Idle**, **Bet Picker**, **Target Picker**, **Autoplay**, **Game Rules**.
+
+**Portrait Phones (confirmed in review):**
+
+| # | Resolution | Device | Reviewed |
+|---|-----------|--------|----------|
+| 1 | 320×568 | iPhone SE 1st gen | |
+| 2 | 344×882 | Galaxy Z Fold 5 (inner) | Yes |
+| 3 | 360×640 | Samsung Galaxy S5, common Android | |
+| 4 | 360×740 | Samsung Galaxy S8+ | Yes |
+| 5 | 375×667 | iPhone SE (2nd/3rd gen) | Yes |
+| 6 | 375×812 | iPhone X/XS/11 Pro | |
+| 7 | 390×844 | iPhone 12 Pro | Yes |
+| 8 | 393×852 | iPhone 14 Pro | |
+| 9 | 412×732 | Google Pixel | |
+| 10 | 412×914 | Samsung Galaxy A51/71 | Yes |
+| 11 | 412×915 | Pixel 7 / Galaxy S20 Ultra | Yes |
+| 12 | 414×736 | iPhone 6+/7+/8+ | |
+| 13 | 414×896 | iPhone XR/11 | Yes |
+| 14 | 430×932 | iPhone 14 Pro Max | Yes |
+
+**Tablets & Foldables (confirmed in review):**
+
+| # | Resolution | Device | Reviewed |
+|---|-----------|--------|----------|
+| 15 | 540×720 | Surface Duo | Yes |
+| 16 | 768×1024 | iPad Mini | Yes |
+| 17 | 820×1180 | iPad Air | Yes |
+| 18 | 853×1280 | Asus Zenbook Fold | Yes |
+| 19 | 912×1368 | Surface Pro 7 | Yes |
+| 20 | 1024×1366 | iPad Pro | Yes |
+
+**Landscape Phones:**
+
+| # | Resolution | Device |
+|---|-----------|--------|
+| 21 | 568×320 | iPhone SE landscape |
+| 22 | 640×360 | Galaxy S5 landscape |
+| 23 | 667×375 | iPhone 6/7/8 landscape |
+| 24 | 736×414 | iPhone Plus landscape |
+| 25 | 780×360 | Android landscape |
+
+**Smart Displays & Desktops (confirmed in review):**
+
+| # | Resolution | Context | Reviewed |
+|---|-----------|---------|----------|
+| 26 | 400×225 | Stake Engine iframe (minimum) | |
+| 27 | 480×270 | Popout S | |
+| 28 | 480×320 | Small popout | |
+| 29 | 512×288 | 16:9 popout | |
+| 30 | 600×400 | Medium window | |
+| 31 | 640×480 | VGA / classic | |
+| 32 | 768×432 | Wide popout | |
+| 33 | 800×600 | Desktop standard | |
+| 34 | 1024×600 | Nest Hub | Yes |
+| 35 | 1280×720 | Stake Engine desktop (primary review resolution) | |
+| 36 | 1280×800 | Nest Hub Max | Yes |
+
+### CSS Breakpoints
+
+| Breakpoint | Target |
+|-----------|--------|
+| `max-width: 360px` | Narrow phones (iPhone SE 1st gen, 320px) — smallest icons/fonts |
+| `max-width: 768px` | Mobile phones — medium icons/fonts |
+| `max-height: 320px` | Ultra-compact (iframe 400×225, landscape phones) — horizontal layout |
+| Default (>768px, >320px height) | Desktop — full-size icons/fonts |
+
+**Key CSS pattern for scrollable popups on small viewports:**
+```css
+.popup-panel {
+  max-height: 90vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+@media (max-height: 320px) {
+  .popup-panel { max-height: 85vh; }
+  .popup-header, .popup-actions { flex-shrink: 0; }  /* always visible */
+  .popup-content-grid { overflow-y: auto; max-height: 30vh; } /* only this scrolls */
+}
+```
 
 ### Network & Security
 
@@ -915,6 +1018,26 @@ TM and (c) {year} Stake Engine.
 
 **Cause:** Absolute paths (`/audio/file.mp3`) resolve to CDN root instead of game directory.
 **Fix:** Use relative paths (`./audio/file.mp3`) — the `<base>` tag makes them resolve correctly.
+
+### Bug: RTP Values in Info Section Don't Match Math Tab
+
+**Cause:** Hardcoded uniform RTP (e.g., "93.00%" for every mode) instead of computing from actual lookup table data.
+**Fix:** Compute empirical RTP from `lookUpTable_{mode}_0.csv`: `RTP = sum(weight * payoutMultiplier) / (sum(weight) * 100)`. Each mode has a different RTP (e.g., 92.90% for 50x, 93.06% for 10x). Stake Engine's Math tab shows the real values and the Info section must match.
+
+### Bug: Restricted Wording in Social Mode Error Messages
+
+**Cause:** Error strings hardcoded in JS (e.g., `'Insufficient funds'`) bypass the `t()` terminology filter, leaving restricted gambling terms visible on stake.us.
+**Fix:** Pass ALL user-visible strings through `t()`, including error toasts, validation messages, and dynamically generated text. Audit every string literal in game logic, not just template text.
+
+### Bug: Popups Cut Off on Popout S (~480×270)
+
+**Cause:** Popup panels have no `max-height` or `overflow-y`, so on viewports shorter than ~320px the bottom of the popup (including action buttons) is unreachable.
+**Fix:** Add `max-height: 90vh; overflow-y: auto` to popup panels. On ultra-compact (`max-height: 320px`), make headers and action buttons `flex-shrink: 0` and only scroll the content grid (`max-height: 30vh; overflow-y: auto`).
+
+### Bug: Balance Overflow on Mobile S (~320px)
+
+**Cause:** Large balance amounts (e.g., "$25,000.00") push toolbar buttons (info, mute) off-screen when all elements are in a single row on narrow viewports.
+**Fix:** Wrap toolbar buttons and balance in a flex container. On mobile, use `flex-direction: column-reverse` so balance stays on top and buttons move to a separate row below. Add `min-width: 0` and `overflow: hidden` to text containers.
 
 ---
 
