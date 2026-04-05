@@ -151,4 +151,4 @@ The comprehensive platform guide covering:
 
 ## License
 
-Private — for internal use.
+MIT License - see [LICENSE](LICENSE) file for details.
