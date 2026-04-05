@@ -1,180 +1,80 @@
-"""
-Simulation runner for {{GAME_NAME}} (slot game).
+"""Main file for generating simulation results for {{GAME_NAME}}."""
 
-Generates the three required files per mode:
-  1. index.json — mode metadata
-  2. lookUpTable_{mode}_0.csv — simulation weights
-  3. books_{mode}.jsonl.zst — compressed game events
-
-Usage:
-  python run.py
-
-Output goes to ./output/
-
-TODO: Implement actual reel spinning, payline evaluation, and free spin logic.
-"""
-
-import json
-import os
-import random
-from pathlib import Path
-
-try:
-    import zstandard as zstd
-    HAS_ZSTD = True
-except ImportError:
-    HAS_ZSTD = False
-    print("WARNING: zstandard not installed. Output will be uncompressed JSONL.")
-
-from config import (
-    GAME_NAME, TARGET_RTP, NUM_SIMULATIONS,
-    NUM_REELS, NUM_ROWS, SYMBOLS, REEL_STRIPS, PAYTABLE, MODES,
-)
-
-OUTPUT_DIR = Path(__file__).parent / "output"
-
-
-def spin_reels() -> list[list[str]]:
-    """Spin all reels and return a board (reels x rows)."""
-    board = []
-    for reel_idx in range(NUM_REELS):
-        strip = REEL_STRIPS[reel_idx]
-        start = random.randint(0, len(strip) - 1)
-        symbols = []
-        for row in range(NUM_ROWS):
-            symbols.append(strip[(start + row) % len(strip)])
-        board.append(symbols)
-    return board
-
-
-def evaluate_wins(board: list[list[str]]) -> list[dict]:
-    """
-    Evaluate winning combinations on the board.
-
-    TODO: Implement your win evaluation logic here:
-    - Lines: check each payline for matching symbols
-    - Ways: check adjacent reels for matching symbols
-    - Cluster: find connected groups of same symbols
-    """
-    # Placeholder: no wins (implement your logic)
-    return []
-
-
-def generate_simulation(sim_id: int) -> dict:
-    """Generate a single simulation outcome."""
-    board = spin_reels()
-    flat_board = [sym for reel in board for sym in reel]
-    wins = evaluate_wins(board)
-
-    total_win = sum(w.get("win", 0) for w in wins)
-    payout_multiplier = total_win  # Relative to 1x cost
-
-    events = [
-        {
-            "index": 0,
-            "type": "reveal",
-            "board": flat_board,
-            "gameType": "basegame",
-        },
-    ]
-
-    if wins:
-        events.append({
-            "index": 1,
-            "type": "winInfo",
-            "totalWin": total_win,
-            "wins": wins,
-        })
-        events.append({
-            "index": 2,
-            "type": "setWin",
-            "amount": total_win,
-            "winLevel": 2 if total_win > 20 else 1,
-        })
-
-    events.append({"index": len(events), "type": "setTotalWin", "amount": total_win})
-    events.append({"index": len(events), "type": "finalWin", "amount": total_win})
-
-    return {
-        "id": sim_id,
-        "payoutMultiplier": payout_multiplier,
-        "events": events,
-    }
-
-
-def run_mode(mode: dict):
-    """Run simulations for a single mode and write output files."""
-    mode_name = mode["name"]
-    cost = mode["cost"]
-
-    print(f"\n--- Mode: {mode_name} (cost: {cost}x) ---")
-
-    simulations = []
-    total_payout = 0
-
-    for i in range(NUM_SIMULATIONS):
-        sim = generate_simulation(i + 1)
-        simulations.append(sim)
-        total_payout += sim["payoutMultiplier"] * cost
-
-    total_bet = NUM_SIMULATIONS * cost
-    rtp = total_payout / total_bet if total_bet > 0 else 0
-    print(f"RTP: {rtp:.4f} ({rtp*100:.2f}%)")
-
-    # Write JSONL (optionally compressed)
-    jsonl_name = f"books_{mode_name}.jsonl"
-    jsonl_path = OUTPUT_DIR / jsonl_name
-
-    lines = [json.dumps(sim, separators=(",", ":")) + "\n" for sim in simulations]
-    raw_data = "".join(lines).encode("utf-8")
-
-    if HAS_ZSTD:
-        zst_path = OUTPUT_DIR / f"{jsonl_name}.zst"
-        cctx = zstd.ZstdCompressor()
-        with open(zst_path, "wb") as f:
-            f.write(cctx.compress(raw_data))
-        print(f"Wrote {zst_path.name} ({len(simulations)} simulations)")
-        events_file = f"{jsonl_name}.zst"
-    else:
-        with open(jsonl_path, "wb") as f:
-            f.write(raw_data)
-        print(f"Wrote {jsonl_name} ({len(simulations)} simulations)")
-        events_file = jsonl_name
-
-    # Write lookup table CSV (no header)
-    csv_name = f"lookUpTable_{mode_name}_0.csv"
-    csv_path = OUTPUT_DIR / csv_name
-    # Equal weights for now (use optimization algorithm for production)
-    weight = 1_000_000_000 // NUM_SIMULATIONS
-    with open(csv_path, "w") as f:
-        for sim in simulations:
-            f.write(f"{sim['id']},{weight},{sim['payoutMultiplier']}\n")
-    print(f"Wrote {csv_name}")
-
-    return {
-        "name": mode_name,
-        "cost": cost,
-        "events": events_file,
-        "weights": csv_name,
-    }
-
-
-def main():
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-    index_modes = []
-    for mode in MODES:
-        mode_info = run_mode(mode)
-        index_modes.append(mode_info)
-
-    # Write index.json
-    index_path = OUTPUT_DIR / "index.json"
-    with open(index_path, "w") as f:
-        json.dump({"modes": index_modes}, f, indent=2)
-    print(f"\nWrote index.json")
-
-    print(f"\nDone! Output in: {OUTPUT_DIR}")
-
+from gamestate import GameState
+from game_config import GameConfig
+from game_optimization import OptimizationSetup
+from optimization_program.run_script import OptimizationExecution
+from utils.game_analytics.run_analysis import create_stat_sheet
+from utils.rgs_verification import execute_all_tests
+from src.state.run_sims import create_books
+from src.write_data.write_configs import generate_configs
 
 if __name__ == "__main__":
-    main()
+
+    # Configuration
+    num_threads = 10
+    rust_threads = 20
+    batching_size = 5000
+    compression = True
+    profiling = False
+
+    # Number of simulations per mode
+    # TODO: Increase to 1,000,000+ for production
+    num_sim_args = {
+        "base": int(1e5),  # 100,000 simulations for testing
+        # Add more modes here as needed
+    }
+
+    # What to run
+    run_conditions = {
+        "run_sims": True,           # Generate simulation books
+        "run_optimization": True,   # Optimize RTP distribution
+        "run_analysis": True,       # Generate analytics
+        "run_format_checks": True,  # Verify output format
+    }
+    target_modes = list(num_sim_args.keys())
+
+    # Initialize
+    config = GameConfig()
+    gamestate = GameState(config)
+    if run_conditions["run_optimization"] or run_conditions["run_analysis"]:
+        optimization_setup_class = OptimizationSetup(config)
+
+    # Run simulations
+    if run_conditions["run_sims"]:
+        print(f"Generating simulations for {{GAME_NAME}}...")
+        create_books(
+            gamestate,
+            config,
+            num_sim_args,
+            batching_size,
+            num_threads,
+            compression,
+            profiling,
+        )
+
+    # Generate config files (index.json, etc.)
+    generate_configs(gamestate)
+
+    # Optimize RTP distribution
+    if run_conditions["run_optimization"]:
+        print("Running RTP optimization...")
+        OptimizationExecution().run_all_modes(config, target_modes, rust_threads)
+        generate_configs(gamestate)
+
+    # Generate analytics
+    if run_conditions["run_analysis"]:
+        print("Generating analytics...")
+        custom_keys = [{"symbol": "scatter"}]
+        create_stat_sheet(gamestate, custom_keys=custom_keys)
+
+    # Verify output format
+    if run_conditions["run_format_checks"]:
+        print("Verifying output format...")
+        execute_all_tests(config)
+
+    print(f"\nDone! Output files are in: math/{{GAME_SNAKE}}/library/publish_files/")
+    print("Files generated:")
+    print("  - index.json")
+    print("  - lookUpTable_base_0.csv")
+    print("  - books_base.jsonl.zst")

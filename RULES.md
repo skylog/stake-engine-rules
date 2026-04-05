@@ -24,7 +24,9 @@
 15. [Audio & Assets](#15-audio--assets)
 16. [Svelte 5 Gotchas](#16-svelte-5-gotchas)
 17. [Approval Checklist](#17-approval-checklist)
-18. [Common Bugs & Fixes](#18-common-bugs--fixes)
+18. [Quality Gates & Review Process](#18-quality-gates--review-process)
+19. [Conventions & Best Practices](#19-conventions--best-practices)
+20. [Common Bugs & Fixes](#20-common-bugs--fixes)
 
 ---
 
@@ -125,9 +127,24 @@ project-root/
     "stepBet": 100000,
     "defaultBetLevel": 1000000,
     "betLevels": [100000, 500000, 1000000, 5000000, 10000000],
-    "jurisdiction": {}
+    "betModes": {},
+    "jurisdiction": {
+      "socialCasino": false,
+      "disabledFullscreen": false,
+      "disabledTurbo": false,
+      "disabledSuperTurbo": false,
+      "disabledAutoplay": false,
+      "disabledSlamstop": false,
+      "disabledSpacebar": false,
+      "disabledBuyFeature": false,
+      "displayNetPosition": false,
+      "displayRTP": false,
+      "displaySessionTimer": false,
+      "minimumRoundDuration": 0
+    }
   },
-  "round": {}
+  "round": {},
+  "meta": null
 }
 ```
 
@@ -142,6 +159,7 @@ project-root/
   "round": {
     "betID": 123,
     "payoutMultiplier": 200,
+    "costMultiplier": 1.0,
     "state": [ /* BookEvents here, NOT "events" */ ],
     "active": true
   }
@@ -156,6 +174,11 @@ project-root/
 // Response
 { "balance": { "amount": 11000000, "currency": "USD" } }
 ```
+
+**Note on API fields:**
+- `jurisdiction` and `meta` fields are present in authenticate response but should be ignored in most implementations
+- `betModes` contains game-specific bet mode configuration (empty object if not used)
+- `costMultiplier` is used for bonus buy features (1.0 for normal bets)
 
 ### Error Codes
 
@@ -265,11 +288,16 @@ PUMPING → target hit → BONUS_BANNER → PUMPING(bonus) → ... → CASHING_O
 
 ### Critical Rules
 
-1. **Every round MUST call `/wallet/end-round`** — including rugged rounds. Route `rugged → cashingOut → result`, never `rugged → result` directly.
+1. **Call `/wallet/end-round` ONLY for non-zero payout rounds** — rounds with `payoutMultiplier === 0` are automatically completed by the RGS. Check the payout before calling:
+   ```typescript
+   if (book.payoutMultiplier > 0) {
+     await rgs.endRound();
+   }
+   ```
 
 2. **Rugged rounds may be auto-closed by RGS** — when `active === false` in the play response. Track this and skip the `end-round` call, just refresh balance instead.
 
-3. **`endRound` is called ONCE** after all rounds (base + bonus/airdrops complete).
+3. **`endRound` is called ONCE** after all rounds (base + bonus/airdrops complete) — but only if the total payout is non-zero.
 
 4. **Optimistic UX pattern** — allow the player to click the bet button during `rugged` or `cashingOut` states. Queue the intent and fire `APE_IN` when `result` state is reached:
    ```typescript
@@ -442,20 +470,28 @@ If the player refreshes during an active round, the RGS still has that round ope
 
 ### The Fix
 
-Check `auth.round` on startup and close stale rounds:
+Check `auth.round` on startup and close stale rounds with non-zero payout:
 
 ```typescript
 const auth = await rgs.authenticate();
 
 if (auth.round && Object.keys(auth.round).length > 0) {
-  console.info('Stale active round detected, closing...');
-  try {
-    await rgs.endRound();
+  // Only close rounds with non-zero payout (zero-payout rounds are auto-closed by RGS)
+  if (auth.round.payoutMultiplier > 0) {
+    console.info('Stale active round detected, closing...');
+    try {
+      await rgs.endRound();
+      const refreshed = await rgs.getBalance();
+      actor.send({ type: 'UPDATE_BALANCE', balance: refreshed.balance.amount, currency: refreshed.balance.currency });
+    } catch (err) {
+      // Don't throw — round may already be closed
+      console.warn('Failed to close stale round:', err);
+    }
+  } else {
+    console.info('Stale round with zero payout detected (already auto-closed by RGS)');
+    // Just refresh balance, no need to call endRound
     const refreshed = await rgs.getBalance();
     actor.send({ type: 'UPDATE_BALANCE', balance: refreshed.balance.amount, currency: refreshed.balance.currency });
-  } catch (err) {
-    // Don't throw — round may already be closed
-    console.warn('Failed to close stale round:', err);
   }
 }
 ```
@@ -592,11 +628,17 @@ errorToast = t('Insufficient balance');
 
 **2. `lookUpTable_{mode}_0.csv`** — Simulation weights (NO header row):
 ```
-1,1000000000,200
-2,1000000000,0
-3,1000000000,500
+0,1000000000,0
+1,1000000000,0
+2,500000000,150
+3,10000000,2500
 ```
-Format: `simulation_number,round_probability,payout_multiplier`
+Format: `sim_id,weight,payoutMultiplier`
+
+Columns:
+- `sim_id`: Simulation number (0-indexed, matches line in books file)
+- `weight`: Probability weight (larger = more likely to be selected)
+- `payoutMultiplier`: Payout as integer × 100 (200 = 2.00x, 2500 = 25.00x)
 
 **3. `books_{mode}.jsonl.zst`** — Zstandard-compressed JSONL, one simulation per line:
 ```json
@@ -1041,7 +1083,268 @@ Every resolution must be verified across 5 screens: **Idle**, **Bet Picker**, **
 
 ---
 
-## Quick Reference: Init Flow
+## 18. Quality Gates & Review Process
+
+### Approval Gates (5 Stages)
+
+Use these gates to ensure quality at every stage of development. Each gate must pass before moving to the next phase.
+
+#### Gate 1: Before Implementation Starts
+- [ ] Game type confirmed (lines/ways/cluster/scatter)
+- [ ] `game_id` follows naming convention (`{studio_id}_{version}_{game_type}`)
+- [ ] BookEvent contract defined in writing (TypeScript types + Python schema)
+- [ ] Both frontend and math teams have reviewed the contract
+- [ ] Target RTP confirmed with product team (typically 94-97%)
+- [ ] Reference game identified
+
+#### Gate 2: Frontend Code Review
+- [ ] `tsc --noEmit` passes — zero type errors
+- [ ] All `bookEventHandlerMap` handlers are `async`
+- [ ] All `broadcast()` calls are `await`ed
+- [ ] `createEventEmitter` result is destructured correctly
+- [ ] `setContextEventEmitter` receives object `{ eventEmitter }`
+- [ ] EmitterEvent types exported from `.svelte` `<script module>` blocks
+- [ ] `createBonusSnapshot` handler reconstructs state without animations
+- [ ] Win level `max` (level 10) hides UI correctly
+- [ ] `winLevelSoundsPlay/Stop` used for win handlers
+- [ ] `BOOK_EVENT_TYPES_TO_RESERVE` includes all resumable event types
+- [ ] Resume flow tested: mid-bonus reconnect does not replay animations
+
+#### Gate 3: Math Code Review
+- [ ] `game_id` set BEFORE `construct_paths()`
+- [ ] All betmodes defined
+- [ ] Distributions cover all condition combinations
+- [ ] `scatter_triggers` defined (if game has free spins)
+- [ ] `anticipation_triggers` computed correctly: `min(triggers.keys()) - 1`
+- [ ] Reel CSVs exist at correct `self.reels_path`
+- [ ] Simulation run ≥ 1,000,000 rounds
+- [ ] RTP within agreed target (± 0.5%)
+- [ ] BookEvent `index` fields are sequential in simulation output
+
+#### Gate 4: Integration Review (before QA)
+- [ ] BookEvent JSON from Math SDK matches TypeScript types exactly
+- [ ] All event types handled in `bookEventHandlerMap`
+- [ ] No unhandled event types (frontend logs warning or errors)
+- [ ] Resume flow: mid-bonus reconnect tested end-to-end
+
+#### Gate 5: Pre-Launch
+- [ ] Full RTP certification complete
+- [ ] Win levels validated visually (especially `max` — UI hide fires)
+- [ ] Free spin retrigger tested (if applicable)
+- [ ] Mid-bonus reconnect tested in staging
+- [ ] Performance: no frame drops during win animations
+- [ ] No TypeScript `any` or `@ts-ignore` in game logic files
+
+### Code Review Severity Levels
+
+Classify issues found during review:
+
+**BLOCKER** — Must fix before merge:
+- Type errors (`tsc --noEmit` fails)
+- Missing `await` on `broadcast()` calls
+- BookEvent contract mismatch between frontend and math
+- Missing handlers for BookEvent types
+- RTP outside target range (> 0.5% deviation)
+
+**CRITICAL** — Must fix before QA:
+- Resume flow broken (animations replay on reconnect)
+- Win level `max` doesn't hide UI
+- Stale round recovery missing
+- Zero-payout rounds call `endRound()` incorrectly
+- Missing `index` fields in BookEvents
+
+**MAJOR** — Should fix:
+- Hardcoded strings not using `t()` terminology filter
+- Missing error handling for RGS calls
+- Performance issues (frame drops during animations)
+- Accessibility issues (missing ARIA labels, keyboard navigation)
+
+**MINOR** — Nice to have:
+- Code style inconsistencies
+- Missing comments on complex logic
+- Suboptimal variable names
+- Console logs left in production code
+
+---
+
+## 19. Conventions & Best Practices
+
+### Code Style
+
+**TypeScript/JavaScript:**
+- Use TypeScript strict mode
+- Prefer `const` over `let`, avoid `var`
+- Use descriptive variable names (avoid single letters except loop counters)
+- Use async/await over raw Promises
+- Handle errors explicitly (try/catch for async, error states in machines)
+
+**Svelte 5:**
+- Use runes API (`$state`, `$derived`, `$effect`) not legacy reactivity
+- Keep components small and focused (< 200 lines)
+- Extract reusable logic to composables/utilities
+- Use `$props()` for component props, destructure with defaults
+- Avoid side effects in `$derived` (use `$effect` instead)
+
+**XState v5:**
+- One machine per game lifecycle
+- Use actors for async operations (RGS calls)
+- Keep machine logic pure (no side effects in guards/actions)
+- Use context for state data, events for transitions
+- Document complex states with comments
+
+### Naming Conventions
+
+**Files:**
+- Components: `PascalCase.svelte` (e.g., `BetPicker.svelte`)
+- Utilities: `camelCase.ts` (e.g., `formatMoney.ts`)
+- Machines: `camelCaseMachine.ts` (e.g., `gameMachine.ts`)
+- Types: `camelCase.ts` or `types.ts`
+
+**Variables:**
+- Boolean: `isLoading`, `hasError`, `canBet`
+- Functions: `handleClick`, `formatBalance`, `calculatePayout`
+- Constants: `UPPER_SNAKE_CASE` for true constants
+- RGS fields: Match API exactly (`betID`, `payoutMultiplier`, `costMultiplier`)
+
+**Events:**
+- XState: `UPPER_SNAKE_CASE` (e.g., `PLACE_BET`, `UPDATE_BALANCE`)
+- BookEvents: `camelCase` type field (e.g., `"reveal"`, `"setWin"`)
+- DOM: `on:click`, `on:input` (lowercase)
+
+### Error Handling
+
+**RGS API calls:**
+```typescript
+try {
+  const response = await rgs.play(params);
+  // Handle success
+} catch (error) {
+  if (error instanceof RGSError) {
+    // Show user-friendly message
+    console.error('RGS error:', error.code, error.message);
+  } else {
+    // Unknown error
+    console.error('Unexpected error:', error);
+  }
+}
+```
+
+**State machine:**
+- Use `onError` in invoke actors
+- Transition to error states (e.g., `idle.error`)
+- Store error in context for UI display
+- Provide retry mechanisms where appropriate
+
+### Performance
+
+**Avoid:**
+- Unnecessary re-renders (use `$derived` wisely)
+- Large inline objects/arrays in templates (extract to variables)
+- Heavy computations in render path (use `$derived` or memoization)
+- Blocking the main thread (use Web Workers for heavy math)
+
+**Optimize:**
+- Lazy load heavy components (dynamic imports)
+- Debounce/throttle rapid events (input, scroll)
+- Use CSS transforms for animations (not top/left)
+- Preload critical assets (audio, images)
+
+### Accessibility
+
+**Required:**
+- Semantic HTML (`<button>`, `<nav>`, `<main>`)
+- ARIA labels for icon-only buttons
+- Keyboard navigation (Tab, Enter, Escape)
+- Focus management (trap focus in modals)
+- Screen reader announcements for game state changes
+
+**Example:**
+```svelte
+<button
+  aria-label="Place bet"
+  on:click={handleBet}
+  disabled={!canBet}
+>
+  <BetIcon />
+</button>
+```
+
+### Testing Strategy
+
+**Manual testing checklist:**
+- [ ] Demo mode works (no RGS)
+- [ ] Live mode works (with RGS)
+- [ ] Replay mode works (with betID)
+- [ ] Stale round recovery works
+- [ ] All bet modes work
+- [ ] Mobile responsive (see Section 17)
+- [ ] Audio plays correctly
+- [ ] Terminology filter works (social vs real money)
+- [ ] Error states display properly
+
+**Browser testing:**
+- Chrome/Edge (primary)
+- Safari (iOS/macOS)
+- Firefox
+- Mobile browsers (iOS Safari, Chrome Android)
+
+### Security
+
+**Never:**
+- Trust client-side RNG (all outcomes from RGS)
+- Store sensitive data in localStorage
+- Expose API keys or secrets
+- Allow arbitrary code execution
+- Bypass RGS validation
+
+**Always:**
+- Validate RGS responses
+- Sanitize user inputs (if any)
+- Use HTTPS for RGS calls
+- Follow CSP (Content Security Policy)
+- Keep dependencies updated
+
+### Git Workflow
+
+**Commits:**
+- Use conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`
+- Keep commits atomic (one logical change)
+- Write descriptive messages (what and why)
+
+**Branches:**
+- `main` - production-ready code
+- `develop` - integration branch
+- `feature/*` - new features
+- `fix/*` - bug fixes
+
+**Pull Requests:**
+- Reference issue numbers
+- Include screenshots/videos for UI changes
+- Pass all quality gates (see Section 18)
+- Get approval before merging
+
+### Documentation
+
+**Code comments:**
+- Explain WHY, not WHAT (code shows what)
+- Document complex algorithms
+- Add JSDoc for public APIs
+- Keep comments up-to-date
+
+**README files:**
+- Setup instructions
+- Development commands
+- Deployment process
+- Troubleshooting guide
+
+**CLAUDE.md:**
+- Project-specific rules for AI agents
+- Common pitfalls and solutions
+- Links to relevant documentation
+
+---
+
+## 20. Common Bugs & Fixes
 
 ```
 1. Parse URL params (sessionID, rgs_url, social, replay, device, lang)
